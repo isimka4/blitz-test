@@ -297,20 +297,33 @@ ${material ? "Опирайся на этот материал/предложен
 [{"q": "Текст вопроса", "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"], "correct": 0}]
 где "correct" — индекс правильного ответа (0, 1, 2 или 3).`;
 
-      try {
-        const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite:generateContent?key=${encodeURIComponent(gemKey)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0.35, thinkingConfig: { thinkingLevel: "minimal" } }
-            })
+try {
+        const candidateModels = ["gemini-3.8-flash", "gemini-3.8-pro"];
+        let data = null;
+        let lastErr = "";
+
+        for (const model of candidateModels) {
+          document.getElementById("genStatus").textContent = `⚡ ИИ составляет 20 вопросов (${model})...`;
+          const resp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(gemKey)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { temperature: 0.35 }
+              })
+            }
+          );
+          const json = await resp.json();
+          if (resp.ok) {
+            data = json;
+            break;
           }
-        );
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error?.message || "Ошибка Gemini API");
+          lastErr = json.error?.message || `HTTP ${resp.status}`;
+        }
+
+        if (!data) throw new Error(lastErr);
 
         let raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
         raw = raw.replace(/```json|```/g, "").trim();
@@ -343,7 +356,6 @@ ${material ? "Опирайся на этот материал/предложен
       } finally {
         btn.disabled = false;
       }
-    }
 
     function copyRoomLink() {
       const url = `${location.origin}${location.pathname}?code=${activeCode}`;
