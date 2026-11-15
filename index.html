@@ -55,7 +55,6 @@
     .row > * { flex: 1; }
     .hidden { display: none !important; }
 
-    /* Античит и экран вопроса ученика */
     .no-select { user-select: none; -webkit-user-select: none; }
     .timer-bar-wrap {
       width: 100%; height: 10px; background: #e2e8f0; border-radius: 999px;
@@ -90,7 +89,6 @@
 </head>
 <body>
   <div class="container">
-    <!-- Переключатель Ученик / Учитель -->
     <div id="roleTabs" class="tabs">
       <button class="tab-btn active" id="tabStudentBtn" onclick="switchRole('student')">🎓 Я ученик</button>
       <button class="tab-btn" id="tabTeacherBtn" onclick="switchRole('teacher')">👩‍🏫 Кабинет учителя</button>
@@ -144,7 +142,7 @@
 
       <div class="card">
         <h3>✨ Создать блиц-тест через ИИ</h3>
-        <p>Укажите тему урока (или вставьте предложения/правило). ИИ создаст банк из 20 вопросов с подвохами, а каждому ученику выпадут 10 случайных вразброс.</p>
+        <p>Укажите тему урока (или вставьте предложения/правило). ИИ создаст банк из 15 вопросов с подвохами, а каждому ученику выпадут 10 случайных вразброс.</p>
         <input id="lessonTitle" type="text" placeholder="Тема (например: 8 класс — Подлежащее и способы его выражения)" />
         <textarea id="lessonMaterial" rows="3" placeholder="Необязательно: вставьте конкретные предложения или уточнения для вопросов"></textarea>
         <div class="row">
@@ -175,4 +173,501 @@
             <div style="font-size:12px;color:var(--muted);">Код для учеников:</div>
             <div id="activeRoomCode" style="font-size:32px;font-weight:800;color:var(--primary);letter-spacing:2px;">----</div>
           </div>
-          <button class="btn btn-outline" style="width:auto;padding:10px 14px;" onclick="copyRoomLink()">🔗
+          <button class="btn btn-outline" style="width:auto;padding:10px 14px;" onclick="copyRoomLink()">🔗 Копировать ссылку</button>
+        </div>
+        <div id="activeRoomTitle" style="font-weight:600;margin-bottom:12px;"></div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Ученик</th>
+                <th>Прогресс</th>
+                <th>Балл</th>
+                <th>Оценка</th>
+                <th>Вкладки</th>
+              </tr>
+            </thead>
+            <tbody id="resultsTableBody">
+              <tr><td colspan="5" style="color:var(--muted);">Ожидаем подключения учеников...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let supabaseClient = null;
+    let pollInterval = null;
+    let activeCode = "";
+
+    let studentQuestions = [];
+    let studentIdx = 0;
+    let studentScore = 0;
+    let tabSwitches = 0;
+    let resultRowId = null;
+    let timePerQ = 12;
+    let timerHandle = null;
+    let timeLeft = 12;
+    let quizActive = false;
+
+    function initSupabase() {
+      const url = localStorage.getItem("blitz_sb_url") || "";
+      const key = localStorage.getItem("blitz_sb_key") || "";
+      if (url && key && window.supabase) {
+        supabaseClient = window.supabase.createClient(url, key);
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("sbUrl").value = localStorage.getItem("blitz_sb_url") || "";
+      document.getElementById("sbKey").value = localStorage.getItem("blitz_sb_key") || "";
+      document.getElementById("gemKey").value = localStorage.getItem("blitz_gem_key") || "";
+      initSupabase();
+
+      const params = new URLSearchParams(location.search);
+      if (params.get("code")) {
+        document.getElementById("joinCode").value = params.get("code");
+      }
+      if (localStorage.getItem("blitz_sb_url") && localStorage.getItem("blitz_gem_key")) {
+        document.getElementById("settingsBody").classList.add("hidden");
+      }
+    });
+
+    function toggleSettings() {
+      document.getElementById("settingsBody").classList.toggle("hidden");
+    }
+
+    function saveSettings() {
+      const url = document.getElementById("sbUrl").value.trim();
+      const key = document.getElementById("sbKey").value.trim();
+      const gem = document.getElementById("gemKey").value.trim();
+      localStorage.setItem("blitz_sb_url", url);
+      localStorage.setItem("blitz_sb_key", key);
+      localStorage.setItem("blitz_gem_key", gem);
+      initSupabase();
+      document.getElementById("settingsStatus").textContent = "✅ Настройки сохранены!";
+    }
+
+    function switchRole(role) {
+      document.getElementById("tabStudentBtn").classList.toggle("active", role === "student");
+      document.getElementById("tabTeacherBtn").classList.toggle("active", role === "teacher");
+      document.getElementById("studentJoinCard").classList.toggle("hidden", role !== "student");
+      document.getElementById("teacherArea").classList.toggle("hidden", role !== "teacher");
+    }
+
+    // Fetch с жёстким таймаутом, чтобы запрос никогда не висел по 5 минут
+    async function fetchWithTimeout(url, options, timeoutMs = 12000) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(id);
+      }
+    }
+
+    async function getFastGeminiModels(gemKey) {
+      try {
+        const resp = await fetchWithTimeout(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(gemKey)}`,
+          {},
+          7000
+        );
+        const json = await resp.json();
+        if (!resp.ok || !Array.isArray(json.models)) return ["gemini-3.8-flash"];
+
+        const usable = json.models
+          .filter(
+            (m) =>
+              Array.isArray(m.supportedGenerationMethods) &&
+              m.supportedGenerationMethods.includes("generateContent") &&
+              /gemini/i.test(m.name) &&
+              !/embedding|imagen|veo|tts|audio|robotics|thinking|deep-research|learnlm|gemma/i.test(m.name)
+          )
+          .map((m) => m.name.replace(/^models\//, ""));
+
+        usable.sort((a, b) => {
+          const score = (name) => {
+            if (/flash-lite/i.test(name)) return 0;
+            if (/flash/i.test(name) && !/exp|preview/i.test(name)) return 1;
+            if (/flash/i.test(name)) return 2;
+            return 3;
+          };
+          return score(a) - score(b);
+        });
+
+        return usable.length > 0 ? usable : ["gemini-3.8-flash"];
+      } catch {
+        return ["gemini-3.8-flash"];
+      }
+    }
+
+    async function createRoomWithAI() {
+      initSupabase();
+      const gemKey = localStorage.getItem("blitz_gem_key");
+      if (!supabaseClient || !gemKey) {
+        document.getElementById("genStatus").textContent = "⚠️ Сначала заполните и сохраните настройки Supabase и Gemini выше.";
+        document.getElementById("settingsBody").classList.remove("hidden");
+        return;
+      }
+
+      const title = document.getElementById("lessonTitle").value.trim();
+      const material = document.getElementById("lessonMaterial").value.trim();
+      const sec = parseInt(document.getElementById("secPerQ").value, 10);
+      const qCount = parseInt(document.getElementById("qPerStudent").value, 10);
+
+      if (!title) {
+        document.getElementById("genStatus").textContent = "⚠️ Введите тему урока.";
+        return;
+      }
+
+      const btn = document.getElementById("generateBtn");
+      btn.disabled = true;
+
+      const prompt = `Составь ровно 15 коротких тестовых вопросов с 4 вариантами ответа для быстрой блиц-проверки знаний школьников по теме: "${title}".
+${material ? "Опирайся на этот материал/предложения: " + material : ""}
+
+Требования:
+- Вопросы должны быть короткими (1–2 предложения), чтобы ученик успел прочитать за 4–5 секунд, но требующими точного знания правила (с типичными школьными ловушками).
+- Верни ТОЛЬКО валидный JSON-массив без markdown и пояснений в формате:
+[{"q": "Текст вопроса", "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"], "correct": 0}]
+где "correct" — индекс правильного ответа (0, 1, 2 или 3).`;
+
+      try {
+        document.getElementById("genStatus").textContent = "🔍 Ищу свободную быструю модель...";
+        const models = await getFastGeminiModels(gemKey);
+        let data = null;
+        let lastErr = "Не удалось получить ответ от моделей";
+
+        for (const model of models.slice(0, 5)) {
+          document.getElementById("genStatus").textContent = `⚡ Генерирую 15 вопросов через ${model} (макс. 12 сек)...`;
+          try {
+            const resp = await fetchWithTimeout(
+              `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(gemKey)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: prompt }] }],
+                  generationConfig: { temperature: 0.35 }
+                })
+              },
+              12000
+            );
+            const json = await resp.json();
+            if (resp.ok) {
+              data = json;
+              break;
+            }
+            lastErr = json.error?.message || `HTTP ${resp.status}`;
+          } catch (e) {
+            lastErr = e.name === "AbortError" ? `Модель ${model} не ответила за 12 сек, пробую следующую...` : e.message;
+          }
+        }
+
+        if (!data) throw new Error(lastErr);
+
+        let raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        raw = raw.replace(/```json|```/g, "").trim();
+        const questions = JSON.parse(raw);
+
+        if (!Array.isArray(questions) || questions.length < 5) {
+          throw new Error("ИИ вернул некорректный список вопросов, нажмите кнопку ещё раз.");
+        }
+
+        const code = String(Math.floor(1000 + Math.random() * 9000));
+        const { error } = await supabaseClient.from("blitz_rooms").insert({
+          code,
+          title,
+          time_per_question: sec,
+          questions_count: Math.min(qCount, questions.length),
+          questions
+        });
+
+        if (error) throw new Error("Ошибка Supabase: " + error.message);
+
+        activeCode = code;
+        document.getElementById("activeRoomCode").textContent = code;
+        document.getElementById("activeRoomTitle").textContent = title;
+        document.getElementById("liveRoomCard").classList.remove("hidden");
+        document.getElementById("genStatus").textContent = "✅ Комната открыта! Отправьте код ученикам.";
+
+        startTeacherPolling(code);
+      } catch (err) {
+        document.getElementById("genStatus").textContent = "❌ " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function copyRoomLink() {
+      const url = `${location.origin}${location.pathname}?code=${activeCode}`;
+      navigator.clipboard.writeText(`Перейдите по ссылке для блиц-опроса (код ${activeCode}): ${url}`);
+      alert("Ссылка с кодом комнаты скопирована!");
+    }
+
+    function startTeacherPolling(code) {
+      if (pollInterval) clearInterval(pollInterval);
+      const load = async () => {
+        const { data } = await supabaseClient
+          .from("blitz_results")
+          .select("*")
+          .eq("room_code", code)
+          .order("updated_at", { ascending: false });
+
+        const tbody = document.getElementById("resultsTableBody");
+        if (!data || data.length === 0) return;
+
+        tbody.innerHTML = data
+          .map((r) => {
+            const tabBadge =
+              r.tab_switches > 0
+                ? `<span class="badge badge-bad">Уходил: ${r.tab_switches} раз</span>`
+                : `<span class="badge badge-ok">Чисто</span>`;
+            const prog = r.finished ? `<span class="badge badge-ok">Сдал</span>` : `${r.current_q} / ${r.total_q}`;
+            return `<tr>
+              <td><strong>${escapeHtml(r.student_name)}</strong></td>
+              <td>${prog}</td>
+              <td>${r.score} из ${r.total_q}</td>
+              <td><strong>${r.finished ? r.grade : "—"}</strong></td>
+              <td>${tabBadge}</td>
+            </tr>`;
+          })
+          .join("");
+      };
+      load();
+      pollInterval = setInterval(load, 2500);
+    }
+
+    function shuffle(arr) {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    async function startStudentTest() {
+      initSupabase();
+      const code = document.getElementById("joinCode").value.trim();
+      const name = document.getElementById("joinName").value.trim();
+      const status = document.getElementById("joinStatus");
+
+      if (!supabaseClient) {
+        status.textContent = "⚠️ Приложение ещё не настроено учителем (нет ключей Supabase).";
+        return;
+      }
+      if (!code || !name) {
+        status.textContent = "⚠️ Введите код комнаты и вашу фамилию.";
+        return;
+      }
+
+      document.getElementById("startTestBtn").disabled = true;
+      status.textContent = "Подключаемся к комнате...";
+
+      const { data: room, error } = await supabaseClient
+        .from("blitz_rooms")
+        .select("*")
+        .eq("code", code)
+        .eq("is_active", true)
+        .single();
+
+      if (error || !room) {
+        status.textContent = "❌ Комната с таким кодом не найдена.";
+        document.getElementById("startTestBtn").disabled = false;
+        return;
+      }
+
+      const picked = shuffle(room.questions).slice(0, room.questions_count);
+      studentQuestions = picked.map((item) => {
+        const indexed = item.options.map((opt, idx) => ({ opt, isRight: idx === item.correct }));
+        const mixed = shuffle(indexed);
+        return {
+          q: item.q,
+          options: mixed.map((m) => m.opt),
+          correct: mixed.findIndex((m) => m.isRight)
+        };
+      });
+
+      timePerQ = room.time_per_question || 12;
+      studentIdx = 0;
+      studentScore = 0;
+      tabSwitches = 0;
+
+      const { data: inserted } = await supabaseClient
+        .from("blitz_results")
+        .insert({
+          room_code: code,
+          student_name: name,
+          current_q: 1,
+          total_q: studentQuestions.length
+        })
+        .select()
+        .single();
+
+      if (inserted) resultRowId = inserted.id;
+
+      document.getElementById("roleTabs").classList.add("hidden");
+      document.getElementById("studentJoinCard").classList.add("hidden");
+      document.getElementById("studentQuizCard").classList.remove("hidden");
+
+      quizActive = true;
+      renderQuestion();
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (quizActive && document.hidden) registerCheat();
+    });
+    window.addEventListener("blur", () => {
+      if (quizActive) registerCheat();
+    });
+
+    async function registerCheat() {
+      tabSwitches++;
+      document.getElementById("cheatWarning").textContent =
+        `⚠️ Зафиксирован выход из окна теста (${tabSwitches})! Учитель видит это в отчёте.`;
+      if (supabaseClient && resultRowId) {
+        await supabaseClient.from("blitz_results").update({ tab_switches: tabSwitches }).eq("id", resultRowId);
+      }
+    }
+
+    function drawQuestionOnCanvas(text) {
+      const canvas = document.getElementById("questionCanvas");
+      const dpr = window.devicePixelRatio || 1;
+      const width = canvas.parentElement.clientWidth - 40;
+      const ctx = canvas.getContext("2d");
+
+      ctx.font = "600 17px -apple-system, BlinkMacSystemFont, sans-serif";
+      const words = text.split(" ");
+      const lines = [];
+      let current = "";
+
+      for (const w of words) {
+        const test = current ? current + " " + w : w;
+        if (ctx.measureText(test).width > width - 28) {
+          lines.push(current);
+          current = w;
+        } else {
+          current = test;
+        }
+      }
+      if (current) lines.push(current);
+
+      const height = Math.max(90, lines.length * 26 + 34);
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.height = height + "px";
+
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "600 17px -apple-system, BlinkMacSystemFont, sans-serif";
+
+      lines.forEach((line, i) => {
+        ctx.fillText(line, 14, 32 + i * 26);
+      });
+    }
+
+    function renderQuestion() {
+      if (timerHandle) clearInterval(timerHandle);
+      if (studentIdx >= studentQuestions.length) {
+        finishQuiz();
+        return;
+      }
+
+      const item = studentQuestions[studentIdx];
+      document.getElementById("qCounter").textContent = `Вопрос ${studentIdx + 1} из ${studentQuestions.length}`;
+      drawQuestionOnCanvas(item.q);
+
+      const list = document.getElementById("optionsList");
+      list.innerHTML = item.options
+        .map((opt, idx) => `<button class="option-btn" onclick="submitAnswer(${idx})">${escapeHtml(opt)}</button>`)
+        .join("");
+
+      timeLeft = timePerQ;
+      updateTimerUI();
+
+      timerHandle = setInterval(() => {
+        timeLeft -= 0.2;
+        if (timeLeft <= 0) {
+          clearInterval(timerHandle);
+          submitAnswer(-1);
+        } else {
+          updateTimerUI();
+        }
+      }, 200);
+    }
+
+    function updateTimerUI() {
+      const pct = Math.max(0, (timeLeft / timePerQ) * 100);
+      const bar = document.getElementById("timerBar");
+      bar.style.width = pct + "%";
+      bar.style.background = pct > 40 ? "var(--success)" : pct > 20 ? "var(--warning)" : "var(--danger)";
+      document.getElementById("timerText").textContent = `${Math.ceil(timeLeft)} сек`;
+    }
+
+    async function submitAnswer(chosenIdx) {
+      if (timerHandle) clearInterval(timerHandle);
+      const item = studentQuestions[studentIdx];
+      if (chosenIdx === item.correct) studentScore++;
+
+      studentIdx++;
+      if (supabaseClient && resultRowId) {
+        supabaseClient
+          .from("blitz_results")
+          .update({
+            current_q: Math.min(studentIdx + 1, studentQuestions.length),
+            score: studentScore,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", resultRowId);
+      }
+      renderQuestion();
+    }
+
+    function calcRussianGrade(score, total) {
+      const pct = (score / total) * 100;
+      if (pct >= 85) return 5;
+      if (pct >= 68) return 4;
+      if (pct >= 50) return 3;
+      return 2;
+    }
+
+    async function finishQuiz() {
+      quizActive = false;
+      const total = studentQuestions.length;
+      const grade = calcRussianGrade(studentScore, total);
+
+      document.getElementById("studentQuizCard").classList.add("hidden");
+      document.getElementById("studentFinishCard").classList.remove("hidden");
+      document.getElementById("finishSummary").textContent =
+        `Правильных ответов: ${studentScore} из ${total}. Предварительная оценка: ${grade}.`;
+
+      if (tabSwitches > 0) {
+        document.getElementById("finishNote").textContent =
+          `Внимание: зафиксировано переключений вкладок — ${tabSwitches}. Учитель учтёт это при выставлении оценки.`;
+      }
+
+      if (supabaseClient && resultRowId) {
+        await supabaseClient
+          .from("blitz_results")
+          .update({
+            score: studentScore,
+            grade,
+            tab_switches: tabSwitches,
+            finished: true,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", resultRowId);
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+    }
+  </script>
+</body>
+</html>
