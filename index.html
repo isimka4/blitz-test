@@ -232,7 +232,6 @@
       document.getElementById("gemKey").value = localStorage.getItem("blitz_gem_key") || "";
       initSupabase();
 
-      // Если ученик открыл ссылку с параметром ?code=1234 — подставляем код автоматически
       const params = new URLSearchParams(location.search);
       if (params.get("code")) {
         document.getElementById("joinCode").value = params.get("code");
@@ -264,7 +263,7 @@
       document.getElementById("teacherArea").classList.toggle("hidden", role !== "teacher");
     }
 
-    // Генерация вопросов через Gemini 3.8 Flash Lite
+    // Генерация вопросов через Gemini с автоматическим фолбэком
     async function createRoomWithAI() {
       initSupabase();
       const gemKey = localStorage.getItem("blitz_gem_key");
@@ -286,7 +285,6 @@
 
       const btn = document.getElementById("generateBtn");
       btn.disabled = true;
-      document.getElementById("genStatus").textContent = "⚡ ИИ составляет 20 вопросов с подвохами...";
 
       const prompt = `Составь ровно 20 коротких тестовых вопросов с 4 вариантами ответа для быстрой блиц-проверки знаний школьников по теме: "${title}".
 ${material ? "Опирайся на этот материал/предложения: " + material : ""}
@@ -297,7 +295,7 @@ ${material ? "Опирайся на этот материал/предложен
 [{"q": "Текст вопроса", "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"], "correct": 0}]
 где "correct" — индекс правильного ответа (0, 1, 2 или 3).`;
 
-try {
+      try {
         const candidateModels = ["gemini-3.8-flash", "gemini-3.8-pro"];
         let data = null;
         let lastErr = "";
@@ -356,6 +354,7 @@ try {
       } finally {
         btn.disabled = false;
       }
+    }
 
     function copyRoomLink() {
       const url = `${location.origin}${location.pathname}?code=${activeCode}`;
@@ -437,7 +436,6 @@ try {
         return;
       }
 
-      // Выбираем случайные N вопросов и перемешиваем варианты ответа
       const picked = shuffle(room.questions).slice(0, room.questions_count);
       studentQuestions = picked.map((item) => {
         const indexed = item.options.map((opt, idx) => ({ opt, isRight: idx === item.correct }));
@@ -554,7 +552,7 @@ try {
         timeLeft -= 0.2;
         if (timeLeft <= 0) {
           clearInterval(timerHandle);
-          submitAnswer(-1); // Время вышло
+          submitAnswer(-1);
         } else {
           updateTimerUI();
         }
