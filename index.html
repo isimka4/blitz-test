@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Блиц-проверка знаний</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --border: #e2e8f0;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100dvh;
+      display: flex; flex-direction: column; align-items: center; padding: 16px;
+    }
+    .container { width: 100%; max-width: 680px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+      padding: 20px; box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04); margin-bottom: 16px;
+    }
+    h1, h2, h3 { margin: 0 0 12px; }
+    p { margin: 0 0 12px; color: var(--muted); line-height: 1.45; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab-btn {
+      flex: 1; padding: 11px; border: 1px solid var(--border); background: #fff;
+      border-radius: 12px; font-weight: 600; cursor: pointer; font-size: 14px; color: var(--muted);
+    }
+    .tab-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    input, textarea, select {
+      width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
+      font-size: 15px; margin-bottom: 12px; font-family: inherit; background: #fff;
+    }
+    input:focus, textarea:focus { outline: none; border-color: var(--primary); }
+    .btn {
+      width: 100%; padding: 13px 16px; border: none; border-radius: 12px;
+      font-weight: 600; font-size: 15px; cursor: pointer; background: var(--primary); color: #fff;
+      transition: transform 0.05s, background 0.15s;
+    }
+    .btn:active { transform: scale(0.99); }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-success { background: var(--success); }
+    .btn-outline { background: #f1f5f9; color: var(--text); }
+    .row { display: flex; gap: 10px; }
+    .row > * { flex: 1; }
+    .hidden { display: none !important; }
+
+    /* Античит и экран вопроса ученика */
+    .no-select { user-select: none; -webkit-user-select: none; }
+    .timer-bar-wrap {
+      width: 100%; height: 10px; background: #e2e8f0; border-radius: 999px;
+      overflow: hidden; margin-bottom: 14px;
+    }
+    .timer-bar {
+      height: 100%; width: 100%; background: var(--success);
+      transition: width 0.2s linear, background 0.3s;
+    }
+    #questionCanvas {
+      width: 100%; border-radius: 12px; background: #f8fafc;
+      border: 1px solid var(--border); margin-bottom: 14px; display: block;
+    }
+    .option-btn {
+      width: 100%; text-align: left; padding: 14px 16px; margin-bottom: 10px;
+      background: #fff; border: 2px solid var(--border); border-radius: 14px;
+      font-size: 15px; font-weight: 500; cursor: pointer; color: var(--text);
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .option-btn:hover { border-color: var(--primary); background: #eff6ff; }
+    .badge {
+      display: inline-block; padding: 3px 8px; border-radius: 8px; font-size: 12px; font-weight: 600;
+    }
+    .badge-ok { background: #dcfce7; color: #166534; }
+    .badge-warn { background: #fef3c7; color: #92400e; }
+    .badge-bad { background: #fee2e2; color: #991b1b; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 9px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+    th { color: var(--muted); font-weight: 600; }
+    .status-msg { font-size: 13px; margin-top: 8px; color: var(--primary); font-weight: 500; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Переключатель Ученик / Учитель -->
+    <div id="roleTabs" class="tabs">
+      <button class="tab-btn active" id="tabStudentBtn" onclick="switchRole('student')">🎓 Я ученик</button>
+      <button class="tab-btn" id="tabTeacherBtn" onclick="switchRole('teacher')">👩‍🏫 Кабинет учителя</button>
+    </div>
+
+    <!-- ЭКРАН УЧЕНИКА: ВХОД -->
+    <div id="studentJoinCard" class="card">
+      <h2>Блиц-опрос на уроке</h2>
+      <p>Введите код комнаты от учителя и свою фамилию и имя. На каждый вопрос даётся ограниченное время, переключение вкладок фиксируется.</p>
+      <input id="joinCode" type="text" inputmode="numeric" maxlength="6" placeholder="Код комнаты (например: 4812)" />
+      <input id="joinName" type="text" placeholder="Фамилия и имя (например: Белова Александра)" />
+      <button class="btn" id="startTestBtn" onclick="startStudentTest()">Начать тест</button>
+      <div id="joinStatus" class="status-msg"></div>
+    </div>
+
+    <!-- ЭКРАН УЧЕНИКА: ПРОХОЖДЕНИЕ ТЕСТА -->
+    <div id="studentQuizCard" class="card no-select hidden" oncontextmenu="return false;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <strong id="qCounter">Вопрос 1 из 10</strong>
+        <span id="timerText" style="font-weight:700;font-size:16px;color:var(--primary);">12 сек</span>
+      </div>
+      <div class="timer-bar-wrap"><div id="timerBar" class="timer-bar"></div></div>
+      <!-- Вопрос рисуется на Canvas, чтобы его нельзя было выделить и скопировать в ИИ -->
+      <canvas id="questionCanvas" height="130"></canvas>
+      <div id="optionsList"></div>
+      <div id="cheatWarning" class="status-msg" style="color:var(--danger);"></div>
+    </div>
+
+    <!-- ЭКРАН УЧЕНИКА: ФИНИШ -->
+    <div id="studentFinishCard" class="card hidden">
+      <h2>Тест завершён!</h2>
+      <p id="finishSummary" style="font-size:16px;color:var(--text);font-weight:600;"></p>
+      <p id="finishNote">Результат автоматически отправлен учителю.</p>
+      <button class="btn btn-outline" onclick="location.reload()">Выйти</button>
+    </div>
+
+    <!-- КАБИНЕТ УЧИТЕЛЯ -->
+    <div id="teacherArea" class="hidden">
+      <!-- Настройки подключения (сохраняются в браузере учителя) -->
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="toggleSettings()">
+          <h3 style="margin:0;">⚙️ Подключение (Supabase + Gemini)</h3>
+          <span style="font-size:12px;color:var(--primary);">Показать / скрыть</span>
+        </div>
+        <div id="settingsBody" style="margin-top:12px;">
+          <input id="sbUrl" type="text" placeholder="Supabase Project URL (https://xxx.supabase.co)" />
+          <input id="sbKey" type="password" placeholder="Supabase anon public key" />
+          <input id="gemKey" type="password" placeholder="Gemini API Key (AIzaSy...)" />
+          <button class="btn btn-outline" onclick="saveSettings()">Сохранить настройки</button>
+          <div id="settingsStatus" class="status-msg"></div>
+        </div>
+      </div>
+
+      <!-- Генератор новой летучки -->
+      <div class="card">
+        <h3>✨ Создать блиц-тест через ИИ</h3>
+        <p>Укажите тему урока (или вставьте предложения/правило). ИИ создаст банк из 20 вопросов с подвохами, а каждому ученику выпадут 10 случайных вразброс.</p>
+        <input id="lessonTitle" type="text" placeholder="Тема (например: 8 класс — Подлежащее и способы его выражения)" />
+        <textarea id="lessonMaterial" rows="3" placeholder="Необязательно: вставьте конкретные предложения или уточнения для вопросов"></textarea>
+        <div class="row">
+          <div>
+            <label style="font-size:12px;color:var(--muted);">Секунд на 1 вопрос:</label>
+            <select id="secPerQ">
+              <option value="10">10 секунд (жёсткий блиц)</option>
+              <option value="12" selected>12 секунд (оптимально)</option>
+              <option value="15">15 секунд (для длинных фраз)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--muted);">Вопросов ученику:</label>
+            <select id="qPerStudent">
+              <option value="8">8 вопросов</option>
+              <option value="10" selected>10 вопросов</option>
+              <option value="12">12 вопросов</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" id="generateBtn" onclick="createRoomWithAI()">Сгенерировать и открыть комнату</button>
+        <div id="genStatus" class="status-msg"></div>
+      </div>
+
+      <!-- Активная комната и живая ведомость -->
+      <div id="liveRoomCard" class="card hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div>
+            <div style="font-size:12px;color:var(--muted);">Код для учеников:</div>
+            <div id="activeRoomCode" style="font-size:32px;font-weight:800;color:var(--primary);letter-spacing:2px;">----</div>
+          </div>
+          <button class="btn btn-outline" style="width:auto;padding:10px 14px;" onclick="copyRoomLink()">🔗 Копировать ссылку</button>
+        </div>
+        <div id="activeRoomTitle" style="font-weight:600;margin-bottom:12px;"></div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Ученик</th>
+                <th>Прогресс</th>
+                <th>Балл</th>
+                <th>Оценка</th>
+                <th>Вкладки</th>
+              </tr>
+            </thead>
+            <tbody id="resultsTableBody">
+              <tr><td colspan="5" style="color:var(--muted);">Ожидаем подключения учеников...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let supabaseClient = null;
+    let pollInterval = null;
+    let activeCode = "";
+
+    // Состояние ученика
+    let studentQuestions = [];
+    let studentIdx = 0;
+    let studentScore = 0;
+    let tabSwitches = 0;
+    let resultRowId = null;
+    let timePerQ = 12;
+    let timerHandle = null;
+    let timeLeft = 12;
+    let quizActive = false;
+
+    function initSupabase() {
+      const url = localStorage.getItem("blitz_sb_url") || "";
+      const key = localStorage.getItem("blitz_sb_key") || "";
+      if (url && key && window.supabase) {
+        supabaseClient = window.supabase.createClient(url, key);
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("sbUrl").value = localStorage.getItem("blitz_sb_url") || "";
+      document.getElementById("sbKey").value = localStorage.getItem("blitz_sb_key") || "";
+      document.getElementById("gemKey").value = localStorage.getItem("blitz_gem_key") || "";
+      initSupabase();
+
+      // Если ученик открыл ссылку с параметром ?code=1234 — подставляем код автоматически
+      const params = new URLSearchParams(location.search);
+      if (params.get("code")) {
+        document.getElementById("joinCode").value = params.get("code");
+      }
+      if (localStorage.getItem("blitz_sb_url") && localStorage.getItem("blitz_gem_key")) {
+        document.getElementById("settingsBody").classList.add("hidden");
+      }
+    });
+
+    function toggleSettings() {
+      document.getElementById("settingsBody").classList.toggle("hidden");
+    }
+
+    function saveSettings() {
+      const url = document.getElementById("sbUrl").value.trim();
+      const key = document.getElementById("sbKey").value.trim();
+      const gem = document.getElementById("gemKey").value.trim();
+      localStorage.setItem("blitz_sb_url", url);
+      localStorage.setItem("blitz_sb_key", key);
+      localStorage.setItem("blitz_gem_key", gem);
+      initSupabase();
+      document.getElementById("settingsStatus").textContent = "✅ Настройки сохранены!";
+    }
+
+    function switchRole(role) {
+      document.getElementById("tabStudentBtn").classList.toggle("active", role === "student");
+      document.getElementById("tabTeacherBtn").classList.toggle("active", role === "teacher");
+      document.getElementById("studentJoinCard").classList.toggle("hidden", role !== "student");
+      document.getElementById("teacherArea").classList.toggle("hidden", role !== "teacher");
+    }
+
+    // Генерация вопросов через Gemini 3.8 Flash Lite
+    async function createRoomWithAI() {
+      initSupabase();
+      const gemKey = localStorage.getItem("blitz_gem_key");
+      if (!supabaseClient || !gemKey) {
+        document.getElementById("genStatus").textContent = "⚠️ Сначала заполните и сохраните настройки Supabase и Gemini выше.";
+        document.getElementById("settingsBody").classList.remove("hidden");
+        return;
+      }
+
+      const title = document.getElementById("lessonTitle").value.trim();
+      const material = document.getElementById("lessonMaterial").value.trim();
+      const sec = parseInt(document.getElementById("secPerQ").value, 10);
+      const qCount = parseInt(document.getElementById("qPerStudent").value, 10);
+
+      if (!title) {
+        document.getElementById("genStatus").textContent = "⚠️ Введите тему урока.";
+        return;
+      }
+
+      const btn = document.getElementById("generateBtn");
+      btn.disabled = true;
+      document.getElementById("genStatus").textContent = "⚡ ИИ составляет 20 вопросов с подвохами...";
+
+      const prompt = `Составь ровно 20 коротких тестовых вопросов с 4 вариантами ответа для быстрой блиц-проверки знаний школьников по теме: "${title}".
+${material ? "Опирайся на этот материал/предложения: " + material : ""}
+
+Требования:
+- Вопросы должны быть короткими (1–2 предложения), чтобы ученик успел прочитать за 4–5 секунд, но требующими точного знания правила (с типичными школьными ловушками).
+- Верни ТОЛЬКО валидный JSON-массив без markdown и пояснений в формате:
+[{"q": "Текст вопроса", "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"], "correct": 0}]
+где "correct" — индекс правильного ответа (0, 1, 2 или 3).`;
+
+      try {
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite:generateContent?key=${encodeURIComponent(gemKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0.35, thinkingConfig: { thinkingLevel: "minimal" } }
+            })
+          }
+        );
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error?.message || "Ошибка Gemini API");
+
+        let raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        raw = raw.replace(/```json|```/g, "").trim();
+        const questions = JSON.parse(raw);
+
+        if (!Array.isArray(questions) || questions.length < 5) {
+          throw new Error("ИИ вернул некорректный список вопросов, попробуйте ещё раз.");
+        }
+
+        const code = String(Math.floor(1000 + Math.random() * 9000));
+        const { error } = await supabaseClient.from("blitz_rooms").insert({
+          code,
+          title,
+          time_per_question: sec,
+          questions_count: Math.min(qCount, questions.length),
+          questions
+        });
+
+        if (error) throw new Error("Ошибка Supabase: " + error.message);
+
+        activeCode = code;
+        document.getElementById("activeRoomCode").textContent = code;
+        document.getElementById("activeRoomTitle").textContent = title;
+        document.getElementById("liveRoomCard").classList.remove("hidden");
+        document.getElementById("genStatus").textContent = "✅ Комната открыта! Отправьте код ученикам.";
+
+        startTeacherPolling(code);
+      } catch (err) {
+        document.getElementById("genStatus").textContent = "❌ " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function copyRoomLink() {
+      const url = `${location.origin}${location.pathname}?code=${activeCode}`;
+      navigator.clipboard.writeText(`Перейдите по ссылке для блиц-опроса (код ${activeCode}): ${url}`);
+      alert("Ссылка с кодом комнаты скопирована!");
+    }
+
+    function startTeacherPolling(code) {
+      if (pollInterval) clearInterval(pollInterval);
+      const load = async () => {
+        const { data } = await supabaseClient
+          .from("blitz_results")
+          .select("*")
+          .eq("room_code", code)
+          .order("updated_at", { ascending: false });
+
+        const tbody = document.getElementById("resultsTableBody");
+        if (!data || data.length === 0) return;
+
+        tbody.innerHTML = data
+          .map((r) => {
+            const tabBadge =
+              r.tab_switches > 0
+                ? `<span class="badge badge-bad">Уходил: ${r.tab_switches} раз</span>`
+                : `<span class="badge badge-ok">Чисто</span>`;
+            const prog = r.finished ? `<span class="badge badge-ok">Сдал</span>` : `${r.current_q} / ${r.total_q}`;
+            return `<tr>
+              <td><strong>${escapeHtml(r.student_name)}</strong></td>
+              <td>${prog}</td>
+              <td>${r.score} из ${r.total_q}</td>
+              <td><strong>${r.finished ? r.grade : "—"}</strong></td>
+              <td>${tabBadge}</td>
+            </tr>`;
+          })
+          .join("");
+      };
+      load();
+      pollInterval = setInterval(load, 2500);
+    }
+
+    // --- ЛОГИКА УЧЕНИКА ---
+    function shuffle(arr) {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    async function startStudentTest() {
+      initSupabase();
+      const code = document.getElementById("joinCode").value.trim();
+      const name = document.getElementById("joinName").value.trim();
+      const status = document.getElementById("joinStatus");
+
+      if (!supabaseClient) {
+        status.textContent = "⚠️ Приложение ещё не настроено учителем (нет ключей Supabase).";
+        return;
+      }
+      if (!code || !name) {
+        status.textContent = "⚠️ Введите код комнаты и вашу фамилию.";
+        return;
+      }
+
+      document.getElementById("startTestBtn").disabled = true;
+      status.textContent = "Подключаемся к комнате...";
+
+      const { data: room, error } = await supabaseClient
+        .from("blitz_rooms")
+        .select("*")
+        .eq("code", code)
+        .eq("is_active", true)
+        .single();
+
+      if (error || !room) {
+        status.textContent = "❌ Комната с таким кодом не найдена.";
+        document.getElementById("startTestBtn").disabled = false;
+        return;
+      }
+
+      // Выбираем случайные N вопросов и перемешиваем варианты ответа
+      const picked = shuffle(room.questions).slice(0, room.questions_count);
+      studentQuestions = picked.map((item) => {
+        const indexed = item.options.map((opt, idx) => ({ opt, isRight: idx === item.correct }));
+        const mixed = shuffle(indexed);
+        return {
+          q: item.q,
+          options: mixed.map((m) => m.opt),
+          correct: mixed.findIndex((m) => m.isRight)
+        };
+      });
+
+      timePerQ = room.time_per_question || 12;
+      studentIdx = 0;
+      studentScore = 0;
+      tabSwitches = 0;
+
+      const { data: inserted } = await supabaseClient
+        .from("blitz_results")
+        .insert({
+          room_code: code,
+          student_name: name,
+          current_q: 1,
+          total_q: studentQuestions.length
+        })
+        .select()
+        .single();
+
+      if (inserted) resultRowId = inserted.id;
+
+      document.getElementById("roleTabs").classList.add("hidden");
+      document.getElementById("studentJoinCard").classList.add("hidden");
+      document.getElementById("studentQuizCard").classList.remove("hidden");
+
+      quizActive = true;
+      renderQuestion();
+    }
+
+    // Детектор переключения вкладок / сворачивания окна
+    document.addEventListener("visibilitychange", () => {
+      if (quizActive && document.hidden) registerCheat();
+    });
+    window.addEventListener("blur", () => {
+      if (quizActive) registerCheat();
+    });
+
+    async function registerCheat() {
+      tabSwitches++;
+      document.getElementById("cheatWarning").textContent =
+        `⚠️ Зафиксирован выход из окна теста (${tabSwitches})! Учитель видит это в отчёте.`;
+      if (supabaseClient && resultRowId) {
+        await supabaseClient.from("blitz_results").update({ tab_switches: tabSwitches }).eq("id", resultRowId);
+      }
+    }
+
+    // Отрисовка текста вопроса на Canvas (защита от выделения и копирования)
+    function drawQuestionOnCanvas(text) {
+      const canvas = document.getElementById("questionCanvas");
+      const dpr = window.devicePixelRatio || 1;
+      const width = canvas.parentElement.clientWidth - 40;
+      const ctx = canvas.getContext("2d");
+
+      ctx.font = "600 17px -apple-system, BlinkMacSystemFont, sans-serif";
+      const words = text.split(" ");
+      const lines = [];
+      let current = "";
+
+      for (const w of words) {
+        const test = current ? current + " " + w : w;
+        if (ctx.measureText(test).width > width - 28) {
+          lines.push(current);
+          current = w;
+        } else {
+          current = test;
+        }
+      }
+      if (current) lines.push(current);
+
+      const height = Math.max(90, lines.length * 26 + 34);
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.height = height + "px";
+
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "600 17px -apple-system, BlinkMacSystemFont, sans-serif";
+
+      lines.forEach((line, i) => {
+        ctx.fillText(line, 14, 32 + i * 26);
+      });
+    }
+
+    function renderQuestion() {
+      if (timerHandle) clearInterval(timerHandle);
+      if (studentIdx >= studentQuestions.length) {
+        finishQuiz();
+        return;
+      }
+
+      const item = studentQuestions[studentIdx];
+      document.getElementById("qCounter").textContent = `Вопрос ${studentIdx + 1} из ${studentQuestions.length}`;
+      drawQuestionOnCanvas(item.q);
+
+      const list = document.getElementById("optionsList");
+      list.innerHTML = item.options
+        .map((opt, idx) => `<button class="option-btn" onclick="submitAnswer(${idx})">${escapeHtml(opt)}</button>`)
+        .join("");
+
+      timeLeft = timePerQ;
+      updateTimerUI();
+
+      timerHandle = setInterval(() => {
+        timeLeft -= 0.2;
+        if (timeLeft <= 0) {
+          clearInterval(timerHandle);
+          submitAnswer(-1); // Время вышло
+        } else {
+          updateTimerUI();
+        }
+      }, 200);
+    }
+
+    function updateTimerUI() {
+      const pct = Math.max(0, (timeLeft / timePerQ) * 100);
+      const bar = document.getElementById("timerBar");
+      bar.style.width = pct + "%";
+      bar.style.background = pct > 40 ? "var(--success)" : pct > 20 ? "var(--warning)" : "var(--danger)";
+      document.getElementById("timerText").textContent = `${Math.ceil(timeLeft)} сек`;
+    }
+
+    async function submitAnswer(chosenIdx) {
+      if (timerHandle) clearInterval(timerHandle);
+      const item = studentQuestions[studentIdx];
+      if (chosenIdx === item.correct) studentScore++;
+
+      studentIdx++;
+      if (supabaseClient && resultRowId) {
+        supabaseClient
+          .from("blitz_results")
+          .update({
+            current_q: Math.min(studentIdx + 1, studentQuestions.length),
+            score: studentScore,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", resultRowId);
+      }
+      renderQuestion();
+    }
+
+    function calcRussianGrade(score, total) {
+      const pct = (score / total) * 100;
+      if (pct >= 85) return 5;
+      if (pct >= 68) return 4;
+      if (pct >= 50) return 3;
+      return 2;
+    }
+
+    async function finishQuiz() {
+      quizActive = false;
+      const total = studentQuestions.length;
+      const grade = calcRussianGrade(studentScore, total);
+
+      document.getElementById("studentQuizCard").classList.add("hidden");
+      document.getElementById("studentFinishCard").classList.remove("hidden");
+      document.getElementById("finishSummary").textContent =
+        `Правильных ответов: ${studentScore} из ${total}. Предварительная оценка: ${grade}.`;
+
+      if (tabSwitches > 0) {
+        document.getElementById("finishNote").textContent =
+          `Внимание: зафиксировано переключений вкладок — ${tabSwitches}. Учитель учтёт это при выставлении оценки.`;
+      }
+
+      if (supabaseClient && resultRowId) {
+        await supabaseClient
+          .from("blitz_results")
+          .update({
+            score: studentScore,
+            grade,
+            tab_switches: tabSwitches,
+            finished: true,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", resultRowId);
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+    }
+  </script>
+</body>
+</html>
