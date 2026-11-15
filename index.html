@@ -133,7 +133,7 @@
         </div>
         <div id="settingsBody" style="margin-top:12px;">
           <input id="sbUrl" type="text" placeholder="Supabase Project URL (https://xxx.supabase.co)" />
-          <input id="sbKey" type="password" placeholder="Supabase anon public key" />
+          <input id="sbKey" type="password" placeholder="Supabase Publishable key" />
           <input id="gemKey" type="password" placeholder="Gemini API Key (AIzaSy...)" />
           <button class="btn btn-outline" onclick="saveSettings()">Сохранить настройки</button>
           <div id="settingsStatus" class="status-msg"></div>
@@ -197,6 +197,9 @@
   </div>
 
   <script>
+    const DEFAULT_SB_URL = "https://sghalczfkanbakgchsgg.supabase.co";
+    const DEFAULT_SB_KEY = "sb_publishable_G4VMKMCD3QHR0ZE1LWPplQ_4YrGPYqg";
+
     let supabaseClient = null;
     let pollInterval = null;
     let activeCode = "";
@@ -211,17 +214,24 @@
     let timeLeft = 12;
     let quizActive = false;
 
+    function cleanSupabaseUrl(raw) {
+      return (raw || "").trim().replace(/\/rest\/v1\/?$/i, "").replace(/\/+$/, "");
+    }
+
     function initSupabase() {
-      const url = localStorage.getItem("blitz_sb_url") || "";
-      const key = localStorage.getItem("blitz_sb_key") || "";
+      const savedUrl = cleanSupabaseUrl(localStorage.getItem("blitz_sb_url"));
+      const url = savedUrl || DEFAULT_SB_URL;
+      const key = (localStorage.getItem("blitz_sb_key") || "").trim() || DEFAULT_SB_KEY;
       if (url && key && window.supabase) {
         supabaseClient = window.supabase.createClient(url, key);
       }
     }
 
     window.addEventListener("DOMContentLoaded", () => {
-      document.getElementById("sbUrl").value = localStorage.getItem("blitz_sb_url") || "";
-      document.getElementById("sbKey").value = localStorage.getItem("blitz_sb_key") || "";
+      const currentUrl = cleanSupabaseUrl(localStorage.getItem("blitz_sb_url")) || DEFAULT_SB_URL;
+      const currentKey = (localStorage.getItem("blitz_sb_key") || "").trim() || DEFAULT_SB_KEY;
+      document.getElementById("sbUrl").value = currentUrl;
+      document.getElementById("sbKey").value = currentKey;
       document.getElementById("gemKey").value = localStorage.getItem("blitz_gem_key") || "";
       initSupabase();
 
@@ -229,7 +239,7 @@
       if (params.get("code")) {
         document.getElementById("joinCode").value = params.get("code");
       }
-      if (localStorage.getItem("blitz_sb_url") && localStorage.getItem("blitz_gem_key")) {
+      if (localStorage.getItem("blitz_gem_key")) {
         document.getElementById("settingsBody").classList.add("hidden");
       }
     });
@@ -239,9 +249,10 @@
     }
 
     function saveSettings() {
-      const url = document.getElementById("sbUrl").value.trim();
-      const key = document.getElementById("sbKey").value.trim();
+      const url = cleanSupabaseUrl(document.getElementById("sbUrl").value) || DEFAULT_SB_URL;
+      const key = document.getElementById("sbKey").value.trim() || DEFAULT_SB_KEY;
       const gem = document.getElementById("gemKey").value.trim();
+      document.getElementById("sbUrl").value = url;
       localStorage.setItem("blitz_sb_url", url);
       localStorage.setItem("blitz_sb_key", key);
       localStorage.setItem("blitz_gem_key", gem);
@@ -256,7 +267,6 @@
       document.getElementById("teacherArea").classList.toggle("hidden", role !== "teacher");
     }
 
-    // Fetch с жёстким таймаутом, чтобы запрос никогда не висел по 5 минут
     async function fetchWithTimeout(url, options, timeoutMs = 12000) {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -307,7 +317,7 @@
       initSupabase();
       const gemKey = localStorage.getItem("blitz_gem_key");
       if (!supabaseClient || !gemKey) {
-        document.getElementById("genStatus").textContent = "⚠️ Сначала заполните и сохраните настройки Supabase и Gemini выше.";
+        document.getElementById("genStatus").textContent = "⚠️ Введите Gemini API Key в настройках выше и нажмите «Сохранить настройки».";
         document.getElementById("settingsBody").classList.remove("hidden");
         return;
       }
@@ -456,7 +466,7 @@ ${material ? "Опирайся на этот материал/предложен
       const status = document.getElementById("joinStatus");
 
       if (!supabaseClient) {
-        status.textContent = "⚠️ Приложение ещё не настроено учителем (нет ключей Supabase).";
+        status.textContent = "⚠️ Не удалось подключиться к базе данных.";
         return;
       }
       if (!code || !name) {
